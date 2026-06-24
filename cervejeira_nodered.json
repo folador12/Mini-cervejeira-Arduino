@@ -1,0 +1,360 @@
+[
+  {
+    "id": "tab_cervejeira",
+    "type": "tab",
+    "label": "Mini Cervejeira",
+    "disabled": false,
+    "info": ""
+  },
+
+  {
+    "id": "serial_port_config",
+    "type": "serial-port",
+    "name": "Arduino",
+    "serialport": "/dev/ttyUSB0",
+    "serialbaud": "9600",
+    "databits": "8",
+    "parity": "none",
+    "stopbits": "1",
+    "waitfor": "",
+    "newline": "\\n",
+    "bin": "false",
+    "out": "char",
+    "addchar": "",
+    "responsetimeout": "10000"
+  },
+
+  {
+    "id": "serial_in",
+    "type": "serial in",
+    "z": "tab_cervejeira",
+    "name": "Arduino → NR",
+    "serial": "serial_port_config",
+    "x": 100, "y": 80,
+    "wires": [["json_parse"]]
+  },
+
+  {
+    "id": "serial_out",
+    "type": "serial out",
+    "z": "tab_cervejeira",
+    "name": "NR → Arduino",
+    "serial": "serial_port_config",
+    "x": 700, "y": 400,
+    "wires": []
+  },
+
+  {
+    "id": "json_parse",
+    "type": "json",
+    "z": "tab_cervejeira",
+    "name": "Parse JSON",
+    "property": "payload",
+    "action": "obj",
+    "pretty": false,
+    "x": 280, "y": 80,
+    "wires": [["distribuir"]]
+  },
+
+  {
+    "id": "distribuir",
+    "type": "function",
+    "z": "tab_cervejeira",
+    "name": "Distribuir estado",
+    "func":
+      "var d = msg.payload;\n" +
+      "if (typeof d !== 'object' || d.temp === undefined) return null;\n" +
+      "\n" +
+      "// Salva estado global para os botões consultarem\n" +
+      "flow.set('rodando', d.rodando);\n" +
+      "flow.set('bomba',   d.bomba);\n" +
+      "\n" +
+      "// Timer formatado\n" +
+      "var ref = d.proc === 1 ? Math.max(0, 120000 - d.dec) : d.dec;\n" +
+      "var m = Math.floor(ref / 60000) % 60;\n" +
+      "var s = Math.floor(ref / 1000)  % 60;\n" +
+      "var timer = (m<10?'0':'')+m+':'+(s<10?'0':'')+s;\n" +
+      "\n" +
+      "// Label dinâmico do botão processo\n" +
+      "var lblProc = d.rodando ? '⏸  Pausar Processo' : '▶  Iniciar Processo';\n" +
+      "\n" +
+      "// Cor do status (via classe CSS do ui_text)\n" +
+      "var corStatus = d.rodando ? '#1D9E75' : '#888780';\n" +
+      "\n" +
+      "node.send([\n" +
+      "  {payload: d.temp},\n" +
+      "  {payload: 'P' + d.proc + ' — ' + (d.rodando ? 'RODANDO' : 'PARADO') + '  ' + timer,\n" +
+      "   style: {color: corStatus}},\n" +
+      "  {payload: d.bomba   ? 'LIGADA'    : 'DESLIGADA'},\n" +
+      "  {payload: d.aquec   ? 'LIGADO'    : 'DESLIGADO'},\n" +
+      "  {payload: d.bomba   ? true        : false},\n" +
+      "  {payload: lblProc}\n" +
+      "]);\n",
+    "outputs": 6,
+    "x": 480, "y": 80,
+    "wires": [
+      ["gauge_temp", "chart_temp"],
+      ["text_status"],
+      ["text_bomba"],
+      ["text_aquecedor"],
+      ["switch_bomba_fb"],
+      ["btn_proc_label"]
+    ]
+  },
+
+  {
+    "id": "gauge_temp",
+    "type": "ui_gauge",
+    "z": "tab_cervejeira",
+    "name": "Temperatura",
+    "group": "grp_monitoramento",
+    "order": 1,
+    "width": 6, "height": 4,
+    "gtype": "gage",
+    "title": "Temperatura",
+    "label": "°C",
+    "format": "{{value}}",
+    "min": 0, "max": 100,
+    "colors": ["#3B8BD4","#EF9F27","#E24B4A"],
+    "seg1": "40", "seg2": "70",
+    "x": 700, "y": 40,
+    "wires": []
+  },
+
+  {
+    "id": "chart_temp",
+    "type": "ui_chart",
+    "z": "tab_cervejeira",
+    "name": "Histórico Temp",
+    "group": "grp_historico",
+    "order": 1,
+    "width": 12, "height": 5,
+    "label": "Temperatura (°C)",
+    "chartType": "line",
+    "legend": "false",
+    "xformat": "HH:mm:ss",
+    "interpolate": "linear",
+    "nodata": "Aguardando dados...",
+    "dot": false,
+    "ymin": "0", "ymax": "100",
+    "removeOlder": 1,
+    "removeOlderPoints": "300",
+    "removeOlderUnit": "3600",
+    "cutout": 0,
+    "useOneColor": false,
+    "colors": ["#E24B4A"],
+    "x": 700, "y": 80,
+    "wires": []
+  },
+
+  {
+    "id": "text_status",
+    "type": "ui_text",
+    "z": "tab_cervejeira",
+    "group": "grp_controles",
+    "order": 1,
+    "width": 12, "height": 1,
+    "name": "Status Processo",
+    "label": "Processo",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "x": 700, "y": 160,
+    "wires": []
+  },
+
+  {
+    "id": "text_bomba",
+    "type": "ui_text",
+    "z": "tab_cervejeira",
+    "group": "grp_controles",
+    "order": 3,
+    "width": 6, "height": 1,
+    "name": "Estado Bomba",
+    "label": "Bomba",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "x": 700, "y": 200,
+    "wires": []
+  },
+
+  {
+    "id": "text_aquecedor",
+    "type": "ui_text",
+    "z": "tab_cervejeira",
+    "group": "grp_controles",
+    "order": 5,
+    "width": 6, "height": 1,
+    "name": "Estado Aquecedor",
+    "label": "Aquecedor",
+    "format": "{{msg.payload}}",
+    "layout": "row-spread",
+    "x": 700, "y": 240,
+    "wires": []
+  },
+
+  {
+    "id": "switch_bomba_fb",
+    "type": "ui_switch",
+    "z": "tab_cervejeira",
+    "name": "Switch Bomba",
+    "group": "grp_controles",
+    "order": 4,
+    "width": 6, "height": 1,
+    "label": "Bomba",
+    "tooltip": "Só funciona com processo parado",
+    "onvalue": "true", "onvalueType": "bool",
+    "offvalue": "false", "offvalueType": "bool",
+    "onicon": "", "officon": "",
+    "oncolor": "#1D9E75", "offcolor": "#888780",
+    "x": 700, "y": 280,
+    "wires": [["cmd_bomba"]]
+  },
+
+  {
+    "id": "cmd_bomba",
+    "type": "function",
+    "z": "tab_cervejeira",
+    "name": "Validar bomba",
+    "func":
+      "// Só envia se processo estiver PARADO\n" +
+      "var rodando = flow.get('rodando');\n" +
+      "if (rodando) {\n" +
+      "  node.warn('Bomba bloqueada: processo em andamento');\n" +
+      "  // Reverte o switch para o estado real\n" +
+      "  var estadoReal = flow.get('bomba') ? true : false;\n" +
+      "  node.send([null, {payload: estadoReal}]);\n" +
+      "  return;\n" +
+      "}\n" +
+      "// Envia comando B para o Arduino\n" +
+      "node.send([{payload: 'B'}, null]);\n",
+    "outputs": 2,
+    "x": 700, "y": 340,
+    "wires": [
+      ["serial_out"],
+      ["switch_bomba_fb"]
+    ]
+  },
+
+  {
+    "id": "btn_proc_label",
+    "type": "ui_text",
+    "z": "tab_cervejeira",
+    "group": "grp_controles",
+    "order": 2,
+    "width": 12, "height": 1,
+    "name": "Label Botão Proc",
+    "label": "",
+    "format": "{{msg.payload}}",
+    "layout": "row-center",
+    "x": 700, "y": 120,
+    "wires": []
+  },
+
+  {
+    "id": "btn_processo",
+    "type": "ui_button",
+    "z": "tab_cervejeira",
+    "name": "Btn Processo",
+    "group": "grp_controles",
+    "order": 2,
+    "width": 12, "height": 1,
+    "passthru": false,
+    "label": "▶ / ⏸  Processo",
+    "tooltip": "Inicia ou pausa o processo atual",
+    "color": "white",
+    "bgcolor": "#0F6E56",
+    "icon": "",
+    "payload": "P",
+    "payloadType": "str",
+    "topic": "",
+    "x": 100, "y": 400,
+    "wires": [["serial_out"]]
+  },
+
+  {
+    "id": "alerta_temp",
+    "type": "function",
+    "z": "tab_cervejeira",
+    "name": "Alerta temperatura",
+    "func":
+      "var temp = flow.get('ultima_temp') || 0;\n" +
+      "if (temp > 80) {\n" +
+      "  msg.payload = '⚠️ Temperatura alta: ' + temp + '°C';\n" +
+      "  return msg;\n" +
+      "}\n" +
+      "return null;\n",
+    "outputs": 1,
+    "x": 300, "y": 500,
+    "wires": [["notif_temp"]]
+  },
+
+  {
+    "id": "inject_watchdog",
+    "type": "inject",
+    "z": "tab_cervejeira",
+    "name": "Watchdog 5s",
+    "repeat": "5",
+    "once": false,
+    "payload": "",
+    "payloadType": "str",
+    "x": 100, "y": 500,
+    "wires": [["alerta_temp"]]
+  },
+
+  {
+    "id": "notif_temp",
+    "type": "ui_toast",
+    "z": "tab_cervejeira",
+    "position": "top right",
+    "displayTime": "5",
+    "sendall": true,
+    "outputs": 0,
+    "ok": "OK",
+    "cancel": "",
+    "raw": false,
+    "topic": "Alerta",
+    "name": "Notificação",
+    "x": 500, "y": 500,
+    "wires": []
+  },
+
+  {
+    "id": "grp_monitoramento",
+    "type": "ui_group",
+    "name": "Temperatura",
+    "tab": "ui_tab_cerv",
+    "order": 1,
+    "disp": true,
+    "width": "12",
+    "collapse": false
+  },
+  {
+    "id": "grp_controles",
+    "type": "ui_group",
+    "name": "Controles",
+    "tab": "ui_tab_cerv",
+    "order": 2,
+    "disp": true,
+    "width": "12",
+    "collapse": false
+  },
+  {
+    "id": "grp_historico",
+    "type": "ui_group",
+    "name": "Histórico",
+    "tab": "ui_tab_cerv",
+    "order": 3,
+    "disp": true,
+    "width": "12",
+    "collapse": false
+  },
+  {
+    "id": "ui_tab_cerv",
+    "type": "ui_tab",
+    "name": "Mini Cervejeira",
+    "icon": "local_drink",
+    "order": 1,
+    "disabled": false,
+    "hidden": false
+  }
+]
