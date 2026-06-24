@@ -10,9 +10,9 @@
     "id": "help",
     "type": "comment",
     "z": "tab_sim",
-    "name": "LEIA: como ligar no Arduino real",
-    "info": "### Como ligar no ARDUINO REAL\n\nEsta aba roda em SIMULACAO. Para usar o Arduino de verdade:\n\n1. Instale o pacote serial:  npm i node-red-node-serialport  (na pasta do Node-RED)\n2. DESABILITE o no \"Clock 1s\" (clique nele > Disable) para parar a simulacao.\n3. HABILITE os nos \"Arduino -> NR\" e \"NR -> Arduino\" (Enable).\n4. Abra o config \"Arduino\" e ajuste a porta COM (ex.: COM3) e baud 9600.\n\nO simulador emite EXATAMENTE o mesmo JSON do Arduino, entao o resto do\npainel (grafico, gauge, botoes) funciona igual nos dois modos.\n\nObs.: o modo \"Teste / Padrao\" e fiel ao firmware atual (65C / 2 min).\nAs receitas Pilsen/APA sao da simulacao (o firmware atual nao executa\nmostura por etapas; isso pode ser adicionado depois).",
-    "x": 170,
+    "name": "LEIA: plug-and-play (simulacao + Arduino real)",
+    "info": "### PLUG-AND-PLAY (zero ajuste manual)\n\nSem Arduino: roda em SIMULACAO automaticamente.\nCom Arduino: basta CONECTAR o cabo USB.\n\n- A porta COM e detectada sozinha (no \"Detectar porta Arduino\", a cada 8s).\n- Quando chega dado real, o SIMULADOR RECUA sozinho (auto-switch).\n- Desconectou? A simulacao volta em ~5s.\n\nNao precisa habilitar/desabilitar nenhum no, nem digitar a porta COM.\n(Requer o pacote node-red-node-serialport instalado.)\n\nO simulador emite EXATAMENTE o mesmo JSON do Arduino e usa os mesmos\ncomandos P/B, entao gauge, grafico e botoes funcionam nos dois modos.\n\nObs.: o modo \"Teste / Padrao\" e fiel ao firmware atual (65C / 2 min).\nAs receitas Pilsen/APA sao da simulacao (o firmware atual nao executa\nmostura por etapas; pode ser adicionado depois).",
+    "x": 200,
     "y": 40,
     "wires": []
   },
@@ -51,7 +51,7 @@
     "type": "function",
     "z": "tab_sim",
     "name": "Motor de Simulacao (Arduino)",
-    "func": "// MOTOR DE SIMULACAO DO ARDUINO\n// Emite o MESMO objeto do Arduino (apos parse JSON):\n//   {temp, proc, rodando, bomba, aquec, dec} + extras p/ UI\n// Entradas (1 input, desambiguadas por topic/payload):\n//   msg.topic==='tick'  -> avanca a simulacao\n//   msg.payload==='P'   -> inicia/pausa processo\n//   msg.payload==='B'   -> liga/desliga bomba (so parado)\n//   payload === chave de receita -> troca receita\nconst RECEITAS = {\n  teste:  { nome:'Teste / Padrao', etapas:[ {nome:'Mostura 65C', temp:65, durMin:2} ] },\n  pilsen: { nome:'Pilsen (mostura por etapas)', etapas:[\n      {nome:'Patamar proteico', temp:52, durMin:15},\n      {nome:'Sacarificacao',    temp:63, durMin:40},\n      {nome:'Mash-out',         temp:78, durMin:5} ] },\n  apa:    { nome:'American Pale Ale', etapas:[\n      {nome:'Sacarificacao', temp:67, durMin:45},\n      {nome:'Mash-out',      temp:78, durMin:8} ] }\n};\nconst AMBIENTE = 25.0;\nconst HIST = 0.5;\n\nlet s = context.get('s');\nif (!s) {\n  s = { receita:'teste', etapa:0, temp:AMBIENTE, rodando:false, bomba:false,\n        aquec:false, decSeg:0, concluido:false };\n  context.set('s', s);\n}\n\nfunction emitir() {\n  const st = context.get('s');\n  const rec = RECEITAS[st.receita] || RECEITAS.teste;\n  const et = rec.etapas[Math.min(st.etapa, rec.etapas.length-1)];\n  return { payload: {\n    // compativel com o Arduino real:\n    temp: Math.round(st.temp*10)/10,\n    proc: st.etapa+1,\n    rodando: st.rodando ? 1 : 0,\n    bomba: st.bomba ? 1 : 0,\n    aquec: st.aquec ? 1 : 0,\n    dec: Math.round(st.decSeg*1000),\n    // extras p/ a UI:\n    receita: rec.nome,\n    receitaKey: st.receita,\n    etapaNome: et.nome,\n    etapaIdx: st.etapa+1,\n    etapaTotal: rec.etapas.length,\n    setpoint: et.temp,\n    etapaDurSeg: et.durMin*60,\n    concluido: st.concluido\n  }};\n}\n\nconst topic = msg.topic;\nconst p = msg.payload;\n\n// troca de receita\nif (topic === 'receita' || (typeof p === 'string' && RECEITAS[p])) {\n  if (RECEITAS[p]) s.receita = p;\n  s.etapa = 0; s.rodando = false; s.bomba = false; s.aquec = false;\n  s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE;\n  context.set('s', s);\n  return emitir();\n}\n\n// comando P (processo)\nif (p === 'P') {\n  if (!s.rodando) {\n    if (s.concluido) { s.etapa = 0; s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE; }\n    s.rodando = true; s.bomba = false;\n  } else {\n    s.rodando = false;\n  }\n  context.set('s', s);\n  return emitir();\n}\n\n// comando B (bomba, so com processo parado)\nif (p === 'B') {\n  if (!s.rodando) { s.bomba = !s.bomba; context.set('s', s); }\n  return emitir();\n}\n\n// tick: avanco da simulacao\nif (topic === 'tick') {\n  const rec = RECEITAS[s.receita] || RECEITAS.teste;\n  const totalSeg = rec.etapas.reduce(function(a,e){ return a + e.durMin*60; }, 0);\n  const menorSeg = rec.etapas.reduce(function(a,e){ return Math.min(a, e.durMin*60); }, Infinity);\n  // tempo acelerado p/ visualizacao: receita inteira em ~40s,\n  // mas garantindo que ate a etapa mais curta tenha >= 6 passos (patamar visivel)\n  const passoSeg = Math.max(1, Math.min(totalSeg/40, menorSeg/6));\n\n  if (s.rodando) {\n    let et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const durSeg = et.durMin*60;\n    s.decSeg += passoSeg;\n    if (s.decSeg >= durSeg) {\n      if (s.etapa < rec.etapas.length-1) { s.etapa++; s.decSeg = 0; }\n      else { s.decSeg = durSeg; s.rodando = false; s.concluido = true; }   // clamp + conclui\n    }\n    et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const sp = et.temp;\n    s.bomba = false;                                   // intertravamento\n    // aproximacao exponencial: sobe e ASSENTA no setpoint (patamar limpo),\n    // independente da aceleracao do tempo\n    s.temp += (sp - s.temp) * 0.5;\n    s.aquec = (s.temp < sp - HIST);                    // LED: aquecendo enquanto abaixo do alvo\n  } else {\n    s.aquec = false;\n    if (!s.concluido) s.temp += (AMBIENTE - s.temp) * 0.03;   // esfria so se PAUSADO (concluido segura)\n  }\n  context.set('s', s);\n  return emitir();\n}\n\nreturn null;",
+    "func": "// MOTOR DE SIMULACAO DO ARDUINO\n// Emite o MESMO objeto do Arduino (apos parse JSON):\n//   {temp, proc, rodando, bomba, aquec, dec} + extras p/ UI\n// Entradas (1 input, desambiguadas por topic/payload):\n//   msg.topic==='tick'  -> avanca a simulacao\n//   msg.payload==='P'   -> inicia/pausa processo\n//   msg.payload==='B'   -> liga/desliga bomba (so parado)\n//   payload === chave de receita -> troca receita\n//\n// AUTO-SWITCH: se o Arduino real enviou dado nos ultimos 5s, o simulador RECUA.\nif (Date.now() - (flow.get('lastReal') || 0) < 5000) return null;\n\nconst RECEITAS = {\n  teste:  { nome:'Teste / Padrao', etapas:[ {nome:'Mostura 65C', temp:65, durMin:2} ] },\n  pilsen: { nome:'Pilsen (mostura por etapas)', etapas:[\n      {nome:'Patamar proteico', temp:52, durMin:15},\n      {nome:'Sacarificacao',    temp:63, durMin:40},\n      {nome:'Mash-out',         temp:78, durMin:5} ] },\n  apa:    { nome:'American Pale Ale', etapas:[\n      {nome:'Sacarificacao', temp:67, durMin:45},\n      {nome:'Mash-out',      temp:78, durMin:8} ] }\n};\nconst AMBIENTE = 25.0;\nconst HIST = 0.5;\n\nlet s = context.get('s');\nif (!s) {\n  s = { receita:'teste', etapa:0, temp:AMBIENTE, rodando:false, bomba:false,\n        aquec:false, decSeg:0, concluido:false };\n  context.set('s', s);\n}\n\nfunction emitir() {\n  const st = context.get('s');\n  const rec = RECEITAS[st.receita] || RECEITAS.teste;\n  const et = rec.etapas[Math.min(st.etapa, rec.etapas.length-1)];\n  return { payload: {\n    // compativel com o Arduino real:\n    temp: Math.round(st.temp*10)/10,\n    proc: st.etapa+1,\n    rodando: st.rodando ? 1 : 0,\n    bomba: st.bomba ? 1 : 0,\n    aquec: st.aquec ? 1 : 0,\n    dec: Math.round(st.decSeg*1000),\n    // extras p/ a UI:\n    receita: rec.nome,\n    receitaKey: st.receita,\n    etapaNome: et.nome,\n    etapaIdx: st.etapa+1,\n    etapaTotal: rec.etapas.length,\n    setpoint: et.temp,\n    etapaDurSeg: et.durMin*60,\n    concluido: st.concluido\n  }};\n}\n\nconst topic = msg.topic;\nconst p = msg.payload;\n\n// troca de receita\nif (topic === 'receita' || (typeof p === 'string' && RECEITAS[p])) {\n  if (RECEITAS[p]) s.receita = p;\n  s.etapa = 0; s.rodando = false; s.bomba = false; s.aquec = false;\n  s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE;\n  context.set('s', s);\n  return emitir();\n}\n\n// comando P (processo)\nif (p === 'P') {\n  if (!s.rodando) {\n    if (s.concluido) { s.etapa = 0; s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE; }\n    s.rodando = true; s.bomba = false;\n  } else {\n    s.rodando = false;\n  }\n  context.set('s', s);\n  return emitir();\n}\n\n// comando B (bomba, so com processo parado)\nif (p === 'B') {\n  if (!s.rodando) { s.bomba = !s.bomba; context.set('s', s); }\n  return emitir();\n}\n\n// tick: avanco da simulacao\nif (topic === 'tick') {\n  const rec = RECEITAS[s.receita] || RECEITAS.teste;\n  const totalSeg = rec.etapas.reduce(function(a,e){ return a + e.durMin*60; }, 0);\n  const menorSeg = rec.etapas.reduce(function(a,e){ return Math.min(a, e.durMin*60); }, Infinity);\n  // tempo acelerado p/ visualizacao: receita inteira em ~40s,\n  // mas garantindo que ate a etapa mais curta tenha >= 6 passos (patamar visivel)\n  const passoSeg = Math.max(1, Math.min(totalSeg/40, menorSeg/6));\n\n  if (s.rodando) {\n    let et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const durSeg = et.durMin*60;\n    s.decSeg += passoSeg;\n    if (s.decSeg >= durSeg) {\n      if (s.etapa < rec.etapas.length-1) { s.etapa++; s.decSeg = 0; }\n      else { s.decSeg = durSeg; s.rodando = false; s.concluido = true; }   // clamp + conclui\n    }\n    et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const sp = et.temp;\n    s.bomba = false;                                   // intertravamento\n    // aproximacao exponencial: sobe e ASSENTA no setpoint (patamar limpo),\n    // independente da aceleracao do tempo\n    s.temp += (sp - s.temp) * 0.5;\n    s.aquec = (s.temp < sp - HIST);                    // LED: aquecendo enquanto abaixo do alvo\n  } else {\n    s.aquec = false;\n    if (!s.concluido) s.temp += (AMBIENTE - s.temp) * 0.03;   // esfria so se PAUSADO (concluido segura)\n  }\n  context.set('s', s);\n  return emitir();\n}\n\nreturn null;",
     "outputs": 1,
     "noerr": 0,
     "initialize": "",
@@ -71,8 +71,26 @@
     "z": "tab_sim",
     "name": "Arduino -> NR",
     "serial": "serial_cfg",
-    "d": true,
     "x": 150,
+    "y": 200,
+    "wires": [
+      [
+        "marcar_real"
+      ]
+    ]
+  },
+  {
+    "id": "marcar_real",
+    "type": "function",
+    "z": "tab_sim",
+    "name": "Marcar dado real",
+    "func": "flow.set('lastReal', Date.now());\nreturn msg;",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 360,
     "y": 200,
     "wires": [
       [
@@ -88,7 +106,7 @@
     "property": "payload",
     "action": "obj",
     "pretty": false,
-    "x": 360,
+    "x": 540,
     "y": 200,
     "wires": [
       [
@@ -102,10 +120,70 @@
     "z": "tab_sim",
     "name": "NR -> Arduino",
     "serial": "serial_cfg",
-    "d": true,
-    "x": 760,
-    "y": 360,
+    "x": 780,
+    "y": 470,
     "wires": []
+  },
+  {
+    "id": "inject_detect",
+    "type": "inject",
+    "z": "tab_sim",
+    "name": "Auto-detectar Arduino",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "8",
+    "crontab": "",
+    "once": true,
+    "onceDelay": 0.8,
+    "topic": "",
+    "payload": "",
+    "payloadType": "date",
+    "x": 180,
+    "y": 560,
+    "wires": [
+      [
+        "detect_arduino"
+      ]
+    ]
+  },
+  {
+    "id": "detect_arduino",
+    "type": "function",
+    "z": "tab_sim",
+    "name": "Detectar porta Arduino",
+    "func": "// Varre as portas seriais, acha o Arduino e configura o no serial sozinho.\n// (zero ajuste manual de porta COM)\nconst conhecidos = ['2341','2a03','1a86','0403','10c4','1b4f','03eb','1eaf']; // vendorIds comuns\nfunction pontua(p){\n  const vid  = (p.vendorId || '').toLowerCase();\n  const man  = (p.manufacturer || '').toLowerCase();\n  const path = (p.path || '');\n  if (/standard port types/.test(man)) return -1;     // porta da placa-mae\n  if (/^ACPI/i.test(p.pnpId || '')) return -1;\n  let s = 0;\n  if (conhecidos.indexOf(vid) >= 0) s += 10;\n  if (/arduino|wch|ch34|ft232|ftdi|silicon ?labs|cp210|usb.?serial|usb2\\.0-serial/.test(man)) s += 8;\n  if (/usbserial|usbmodem|ttyusb|ttyacm/i.test(path)) s += 3;\n  if (/^com\\d+$/i.test(path)) s += 1;\n  return s;\n}\nreturn serialport.SerialPort.list().then(function(ports){\n  let best = null, bestScore = 0;\n  ports.forEach(function(p){ const sc = pontua(p); if (sc > bestScore){ bestScore = sc; best = p.path; } });\n  const estado = flow.get('serialState') || '';\n  if (best){\n    const novo = 'on:' + best;\n    if (estado !== novo){                                   // so age na transicao\n      flow.set('serialState', novo);\n      node.status({ fill:'green', shape:'dot', text:'Arduino em ' + best });\n      return { payload: { serialport: best, serialbaud:'9600', databits:'8', parity:'none',\n                          stopbits:'1', dtr:'none', rts:'none', cts:'none', dsr:'none', enabled:true } };\n    }\n    return null;                                            // ja conectado nessa porta\n  }\n  if (estado !== 'off'){                                    // nenhum Arduino: fecha o serial (sem ruido)\n    flow.set('serialState','off');\n    node.status({ fill:'grey', shape:'ring', text:'Sem Arduino - simulacao' });\n    return { payload: { enabled:false } };\n  }\n  return null;\n}).catch(function(e){ node.warn('auto-detect serial: ' + e.message); return null; });",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [
+      {
+        "var": "serialport",
+        "module": "serialport"
+      }
+    ],
+    "x": 440,
+    "y": 560,
+    "wires": [
+      [
+        "serial_ctrl"
+      ]
+    ]
+  },
+  {
+    "id": "serial_ctrl",
+    "type": "serial control",
+    "z": "tab_sim",
+    "name": "Aplicar porta detectada",
+    "serial": "serial_cfg",
+    "x": 700,
+    "y": 560,
+    "wires": [
+      []
+    ]
   },
   {
     "id": "distribuir",
@@ -387,7 +465,7 @@
     "id": "serial_cfg",
     "type": "serial-port",
     "name": "Arduino",
-    "serialport": "COM3",
+    "serialport": "COM255",
     "serialbaud": "9600",
     "databits": "8",
     "parity": "none",

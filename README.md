@@ -38,6 +38,8 @@ exatamente o mesmo protocolo do Arduino real.
   - **American Pale Ale** — 67 → 78 °C.
 - Motor de simulação que reproduz a lógica do `.ino` (histerese ±0,5 °C, intertravamento
   da bomba, troca automática de etapa) e emite o **mesmo JSON** do Arduino.
+- **Plug-and-play:** detecta a porta do Arduino sozinho e alterna simulação ↔ hardware
+  automaticamente — sem habilitar/desabilitar nós nem configurar porta COM.
 
 | Inicial | Rodando (Teste) | Pilsen (etapas) |
 |---|---|---|
@@ -61,29 +63,33 @@ Rodar:
 3. Abra o painel em **`http://localhost:1880/dashboard`**, escolha uma receita e clique
    em **Iniciar / Pausar**.
 
-## 🔌 Ligar no Arduino real
+## 🔌 Ligar no Arduino real — plug-and-play (zero ajuste manual)
 
-O simulador emite **o mesmo JSON** e usa **os mesmos comandos** do firmware, então só
-trocamos a fonte de dados:
+**Não precisa mexer em nada no flow.** Ele detecta a porta do Arduino sozinho e alterna
+entre simulação e hardware automaticamente:
 
-1. Garanta que `node-red-node-serialport` está instalado (passo acima).
-2. **Desabilite** o nó **`Clock 1s`** (clique → Disable) — para a simulação.
-3. **Habilite** os nós **`Arduino -> NR`** e **`NR -> Arduino`** (Enable).
-4. No nó de configuração **`Arduino`**, ajuste a **porta COM** (ex.: `COM3`) e baud **9600**.
-5. **Deploy**.
+- **Sem Arduino:** roda em simulação.
+- **Conectou o Arduino (USB):** em ~1 s a porta é detectada, o painel passa a mostrar os
+  **dados reais** e os botões `P`/`B` controlam o hardware. O simulador **recua sozinho**.
+- **Desconectou:** a simulação volta em ~5 s.
 
-> O modo **Teste / Padrão** é fiel ao firmware atual (65 °C / 2 min). As receitas
-> Pilsen/APA são da simulação — o firmware atual não executa mostura por etapas. Para o
-> Arduino real seguir as receitas, basta estender o `.ino` para receber os *setpoints* via
-> serial (evolução futura; o painel já está preparado).
+Requisito único: o pacote `node-red-node-serialport` (no passo de instalação acima). O
+Node-RED instala o `serialport` automaticamente na primeira execução.
 
-### Conferir que está funcionando (30 s)
+> Uma linha `serial port COM255 ... File not found` no log ao iniciar **é normal**: é a
+> porta-placeholder enquanto nenhum Arduino está conectado — ela é fechada sozinha.
 
-1. No editor do Node-RED, o nó **`Arduino -> NR`** deve mostrar **"connected"** (bolinha verde).
-2. A **temperatura no painel deve mudar sozinha** (o Arduino envia o estado 1×/s).
-3. Clique em **Iniciar / Pausar** e veja o LED do processo / aquecedor responder no hardware.
-4. Se não vier nada: confira a **porta COM** (Gerenciador de Dispositivos), se o **baud é 9600**
-   e se a **IDE do Arduino não está com o Serial Monitor aberto** (ele prende a porta).
+### Conferir (10 s)
+
+1. Conecte o Arduino por USB.
+2. A **temperatura no painel muda sozinha** e o nó **`Detectar porta Arduino`** mostra
+   *"Arduino em COMx"*.
+3. Não detectou? Veja se a **IDE do Arduino não está com o Serial Monitor aberto** (ele
+   prende a porta) e se o baud do firmware é **9600**.
+
+> O modo **Teste / Padrão** é fiel ao firmware atual (65 °C / 2 min). As receitas Pilsen/APA
+> são da simulação — o firmware atual não executa mostura por etapas (evolução futura; o
+> painel já está preparado para receber os *setpoints* via serial).
 
 ## 📡 Protocolo serial (Arduino ⇄ Node-RED · 9600 baud)
 
