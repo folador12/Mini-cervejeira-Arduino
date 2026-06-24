@@ -71,6 +71,44 @@ void lcdTimer(unsigned long ms, bool restante) {
   if (s < 10) lcd.print('0'); lcd.print(s);
 }
 
+// ── SUPERVISÓRIO NODE-RED ─────────────────────────────────────
+// Adicione esta variável junto dos outros timestamps:
+// unsigned long tSerial = 0;
+//
+// No loop(), chame: enviarJSON(agora);  receberComando(agora);
+// ─────────────────────────────────────────────────────────────
+
+void enviarJSON(unsigned long agora) {
+  static unsigned long tSerial = 0;
+  if (agora - tSerial < 1000) return;
+  tSerial = agora;
+
+  unsigned long dec = tempoDecorrido + (processoRodando ? agora - tInicio : 0);
+
+  Serial.print(F("{\"temp\":"));   Serial.print(temperatura, 1);
+  Serial.print(F(",\"proc\":"));   Serial.print(processoAtual);
+  Serial.print(F(",\"rodando\":")); Serial.print(processoRodando ? 1 : 0);
+  Serial.print(F(",\"bomba\":"));  Serial.print(bombaLigada ? 1 : 0);
+  Serial.print(F(",\"aquec\":"));  Serial.print(aquecedorLigado ? 1 : 0);
+  Serial.print(F(",\"dec\":"));    Serial.print(dec);
+  Serial.println(F("}"));
+}
+
+void receberComando(unsigned long agora) {
+  if (!Serial.available()) return;
+  char cmd = Serial.read();
+
+  if (cmd == 'P') {                          // toggle processo
+    if (!processoRodando) {
+      bombaLigada = false; processoRodando = true; tInicio = agora;
+    } else {
+      tempoDecorrido += agora - tInicio; processoRodando = false;
+    }
+  }
+  if (cmd == 'B' && !processoRodando)        // toggle bomba (só parado)
+    bombaLigada = !bombaLigada;
+}
+
 // ─────────────────────────────────────────────────────────────
 void setup() {
   Serial.begin(9600);
@@ -178,4 +216,7 @@ void loop() {
     lcdTimer(dec, processoAtual == 1);
     lcd.print(' ');
   }
+
+  enviarJSON(agora);  
+  receberComando(agora);
 }
