@@ -190,7 +190,7 @@
     "type": "function",
     "z": "tab_sim",
     "name": "Distribuir estado",
-    "func": "// Recebe o objeto de estado (do simulador OU do Arduino real apos parse).\n// Tolera ausencia dos campos extras (Arduino real so manda 6 campos).\nconst d = msg.payload;\nif (typeof d !== 'object' || d === null || d.temp === undefined) return null;\n\nconst setpoint = (d.setpoint !== undefined) ? d.setpoint : 65;  // fallback Arduino real\n\nflow.set('rodando', d.rodando);\nflow.set('bomba', d.bomba);\nflow.set('ultima_temp', d.temp);   // <- corrige o bug do alerta antigo\n\nconst estado = {\n  temp: d.temp,\n  setpoint: setpoint,\n  rodando: !!d.rodando,\n  bomba: !!d.bomba,\n  aquec: !!d.aquec,\n  // fallbacks p/ quando vier o Arduino real (so 6 campos, sem os extras de receita):\n  receita: d.receita || 'Arduino (firmware atual)',\n  etapaNome: d.etapaNome || (d.proc === 2 ? 'Etapa 2' : 'Mostura 65°C'),\n  etapaIdx: d.etapaIdx || (d.proc || 1),\n  etapaTotal: d.etapaTotal || 1,\n  decSeg: Math.floor((d.dec || 0) / 1000),\n  etapaDurSeg: d.etapaDurSeg || (d.proc === 1 ? 120 : 0),\n  concluido: !!d.concluido,\n  alerta: d.temp > 80,\n  // \"aquecendo ate o alvo\": usa o flag do simulador; p/ Arduino real, infere por temp < alvo\n  aguardandoTemp: (d.aguardandoTemp !== undefined) ? !!d.aguardandoTemp\n                  : (!!d.rodando && !d.concluido && (d.temp < setpoint - 0.5))\n};\n\nreturn [\n  { payload: d.temp },                                                   // 1 -> gauge\n  [ {topic:'Real', payload: d.temp}, {topic:'Alvo', payload: setpoint} ],// 2 -> chart (2 msgs)\n  { payload: estado }                                                    // 3 -> card status\n];",
+    "func": "// Recebe o objeto de estado (do simulador OU do Arduino real apos parse).\n// Tolera ausencia dos campos extras (Arduino real so manda 6 campos).\nconst d = msg.payload;\nif (typeof d !== 'object' || d === null || d.temp === undefined) return null;\n\nconst setpoint = (d.setpoint !== undefined) ? d.setpoint : 65;  // fallback Arduino real\n\nflow.set('rodando', d.rodando);\nflow.set('bomba', d.bomba);\nflow.set('ultima_temp', d.temp);   // <- corrige o bug do alerta antigo\n\nconst estado = {\n  temp: d.temp,\n  setpoint: setpoint,\n  rodando: !!d.rodando,\n  bomba: !!d.bomba,\n  aquec: !!d.aquec,\n  // fallbacks p/ quando vier o Arduino real (so 6 campos, sem os extras de receita):\n  receita: d.receita || 'Arduino (firmware atual)',\n  etapaNome: d.etapaNome || ('Etapa ' + (d.proc || 1)),\n  etapaIdx: d.etapaIdx || (d.proc || 1),\n  etapaTotal: d.etapaTotal || 1,\n  decSeg: Math.floor((d.dec || 0) / 1000),\n  etapaDurSeg: d.etapaDurSeg || (d.proc === 1 ? 120 : 0),\n  concluido: !!d.concluido,\n  alerta: d.temp > 80,\n  // \"aquecendo ate o alvo\": usa o flag do simulador; p/ Arduino real, infere por temp < alvo\n  aguardandoTemp: (d.aguardandoTemp !== undefined) ? !!d.aguardandoTemp\n                  : (!!d.rodando && !d.concluido && (d.temp < setpoint - 0.5))\n};\n\nreturn [\n  { payload: d.temp },                                                   // 1 -> gauge\n  [ {topic:'Real', payload: d.temp}, {topic:'Alvo', payload: setpoint} ],// 2 -> chart (2 msgs)\n  { payload: estado }                                                    // 3 -> card status\n];",
     "outputs": 3,
     "noerr": 0,
     "initialize": "",
@@ -356,7 +356,8 @@
     "wires": [
       [
         "sim_engine",
-        "chart_clear"
+        "chart_clear",
+        "montar_R"
       ]
     ]
   },
@@ -376,6 +377,25 @@
     "wires": [
       [
         "chart_temp"
+      ]
+    ]
+  },
+  {
+    "id": "montar_R",
+    "type": "function",
+    "z": "tab_sim",
+    "name": "Receita -> Arduino (R...)",
+    "func": "const RECEITAS = {\n  teste:  [ {temp:65, durMin:2} ],\n  pilsen: [ {temp:52, durMin:15}, {temp:63, durMin:40}, {temp:78, durMin:5} ],\n  apa:    [ {temp:67, durMin:45}, {temp:78, durMin:8} ]\n};\nlet etapas = null;\nif (msg.topic === 'receita_custom' && msg.payload && Array.isArray(msg.payload.etapas)) {\n  etapas = msg.payload.etapas;\n} else if (typeof msg.payload === 'string' && RECEITAS[msg.payload]) {\n  etapas = RECEITAS[msg.payload];\n}\nif (!etapas || !etapas.length) return null;\nconst r = 'R' + etapas.map(function(e){ return Math.round(e.temp) + ',' + Math.round(e.durMin); }).join(';') + '\\n';\nreturn { payload: r };",
+    "outputs": 1,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 620,
+    "y": 280,
+    "wires": [
+      [
+        "serial_out"
       ]
     ]
   },
@@ -466,7 +486,8 @@
     "wires": [
       [
         "sim_engine",
-        "chart_clear"
+        "chart_clear",
+        "montar_R"
       ]
     ]
   },
