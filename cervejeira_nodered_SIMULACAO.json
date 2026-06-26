@@ -336,37 +336,21 @@
     "wires": []
   },
   {
-    "id": "dd_receita",
-    "type": "ui-dropdown",
+    "id": "sel_receita",
+    "type": "ui-template",
     "z": "tab_sim",
     "group": "grp_ctrl",
-    "name": "Receita",
-    "label": "Receita / Modo",
-    "tooltip": "Escolha a receita de cerveja",
+    "name": "Receita / Modo",
     "order": 1,
     "width": 4,
     "height": 1,
+    "head": "",
+    "format": "<template>\n  <v-select\n    v-model=\"sel\"\n    :items=\"items\"\n    label=\"Receita / Modo\"\n    density=\"comfortable\"\n    variant=\"outlined\"\n    hide-details\n    @update:menu=\"onMenu\">\n  </v-select>\n</template>\n<script>\nexport default {\n  data() {\n    return {\n      sel: null,\n      presets: [\n        { title: 'Teste / Padrão (65°C · 2 min)', value: 'p:teste' },\n        { title: 'Pilsen (52 → 63 → 78°C)', value: 'p:pilsen' },\n        { title: 'American Pale Ale (67 → 78°C)', value: 'p:apa' }\n      ],\n      salvas: []\n    }\n  },\n  computed: {\n    items() {\n      const arr = [{ type: 'subheader', title: 'Padrão' }].concat(this.presets);\n      if (this.salvas.length) {\n        arr.push({ type: 'divider' });\n        arr.push({ type: 'subheader', title: 'Minhas receitas' });\n        this.salvas.forEach(r => arr.push({ title: '🍺 ' + r.nome, value: 'c:' + r.nome }));\n      }\n      return arr;\n    }\n  },\n  watch: {\n    sel(v) { this.aplicar(v); }\n  },\n  mounted() {\n    this.refresh();\n  },\n  methods: {\n    refresh() {\n      try { this.salvas = JSON.parse(window.localStorage.getItem('cerv_receitas') || '[]'); }\n      catch (e) { this.salvas = []; }\n    },\n    onMenu(open) { if (open) this.refresh(); },\n    aplicar(v) {\n      if (!v) return;\n      if (v.slice(0, 2) === 'p:') {\n        this.send({ topic: 'receita', payload: v.slice(2) });\n      } else if (v.slice(0, 2) === 'c:') {\n        const r = this.salvas.find(x => x.nome === v.slice(2));\n        if (r) this.send({ topic: 'receita_custom', payload: { etapas: r.etapas, nome: r.nome } });\n      }\n    }\n  }\n}\n</script>",
+    "storeOutMessages": false,
     "passthru": false,
-    "multiple": false,
-    "chips": false,
-    "clearable": false,
-    "options": [
-      {
-        "label": "Teste / Padrao  (65°C - 2 min)",
-        "value": "teste"
-      },
-      {
-        "label": "Pilsen  (52 -> 63 -> 78°C)",
-        "value": "pilsen"
-      },
-      {
-        "label": "American Pale Ale  (67 -> 78°C)",
-        "value": "apa"
-      }
-    ],
-    "payload": "",
-    "topic": "receita",
-    "topicType": "str",
+    "resendOnRefresh": false,
+    "templateScope": "local",
+    "className": "",
     "x": 360,
     "y": 300,
     "wires": [
