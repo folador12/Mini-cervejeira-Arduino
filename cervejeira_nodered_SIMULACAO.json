@@ -11,7 +11,7 @@
     "type": "comment",
     "z": "tab_sim",
     "name": "LEIA: plug-and-play (simulacao + Arduino real)",
-    "info": "### PLUG-AND-PLAY (zero ajuste manual)\n\nSem Arduino: roda em SIMULACAO automaticamente.\nCom Arduino: basta CONECTAR o cabo USB.\n\n- A porta COM e detectada sozinha (no \"Detectar porta Arduino\", a cada 8s).\n- Quando chega dado real, o SIMULADOR RECUA sozinho (auto-switch).\n- Desconectou? A simulacao volta em ~5s.\n\nNao precisa habilitar/desabilitar nenhum no, nem digitar a porta COM.\n(Requer o pacote node-red-node-serialport instalado.)\n\nO simulador emite EXATAMENTE o mesmo JSON do Arduino e usa os mesmos\ncomandos P/B, entao gauge, grafico e botoes funcionam nos dois modos.\n\nObs.: o modo \"Teste / Padrao\" e fiel ao firmware atual (65C / 2 min).\nAs receitas Pilsen/APA sao da simulacao (o firmware atual nao executa\nmostura por etapas; pode ser adicionado depois).",
+    "info": "### PLUG-AND-PLAY (zero ajuste manual)\n\nSem Arduino: roda em SIMULACAO automaticamente.\nCom Arduino: basta CONECTAR o cabo USB.\n\n- A porta COM e detectada sozinha (no \"Detectar porta Arduino\", a cada 8s).\n- Quando chega dado real, o SIMULADOR RECUA sozinho (auto-switch).\n- Desconectou? A simulacao volta em ~5s.\n\nNao precisa habilitar/desabilitar nenhum no, nem digitar a porta COM.\n(Requer o pacote node-red-node-serialport instalado.)\n\nO simulador emite EXATAMENTE o mesmo JSON do Arduino e usa os mesmos\ncomandos P/B, entao gauge, grafico e botoes funcionam nos dois modos.\n\n### MUDANCAS (pedidos do professor) - firmware v6_7\n- A bomba pode ligar/desligar TAMBEM durante o processo.\n- O tempo de 2 min so conta APOS atingir 65 C (antes fica aquecendo).\n- Receita Personalizada: monte as etapas (arraste para reordenar) e Usar.\n\nObs.: o modo \"Teste / Padrao\" e fiel ao firmware atual (65C / 2 min).\nAs receitas Pilsen/APA sao da simulacao (o firmware atual nao executa\nmostura por etapas; pode ser adicionado depois).",
     "x": 200,
     "y": 40,
     "wires": []
@@ -51,7 +51,7 @@
     "type": "function",
     "z": "tab_sim",
     "name": "Motor de Simulacao (Arduino)",
-    "func": "// MOTOR DE SIMULACAO DO ARDUINO\n// Emite o MESMO objeto do Arduino (apos parse JSON):\n//   {temp, proc, rodando, bomba, aquec, dec} + extras p/ UI\n// Entradas (1 input, desambiguadas por topic/payload):\n//   msg.topic==='tick'  -> avanca a simulacao\n//   msg.payload==='P'   -> inicia/pausa processo\n//   msg.payload==='B'   -> liga/desliga bomba (so parado)\n//   payload === chave de receita -> troca receita\n//\n// AUTO-SWITCH: se o Arduino real enviou dado nos ultimos 5s, o simulador RECUA.\nif (Date.now() - (flow.get('lastReal') || 0) < 5000) return null;\n\nconst RECEITAS = {\n  teste:  { nome:'Teste / Padrao', etapas:[ {nome:'Mostura 65C', temp:65, durMin:2} ] },\n  pilsen: { nome:'Pilsen (mostura por etapas)', etapas:[\n      {nome:'Patamar proteico', temp:52, durMin:15},\n      {nome:'Sacarificacao',    temp:63, durMin:40},\n      {nome:'Mash-out',         temp:78, durMin:5} ] },\n  apa:    { nome:'American Pale Ale', etapas:[\n      {nome:'Sacarificacao', temp:67, durMin:45},\n      {nome:'Mash-out',      temp:78, durMin:8} ] }\n};\nconst AMBIENTE = 25.0;\nconst HIST = 0.5;\n\nlet s = context.get('s');\nif (!s) {\n  s = { receita:'teste', etapa:0, temp:AMBIENTE, rodando:false, bomba:false,\n        aquec:false, decSeg:0, concluido:false };\n  context.set('s', s);\n}\n\nfunction emitir() {\n  const st = context.get('s');\n  const rec = RECEITAS[st.receita] || RECEITAS.teste;\n  const et = rec.etapas[Math.min(st.etapa, rec.etapas.length-1)];\n  return { payload: {\n    // compativel com o Arduino real:\n    temp: Math.round(st.temp*10)/10,\n    proc: st.etapa+1,\n    rodando: st.rodando ? 1 : 0,\n    bomba: st.bomba ? 1 : 0,\n    aquec: st.aquec ? 1 : 0,\n    dec: Math.round(st.decSeg*1000),\n    // extras p/ a UI:\n    receita: rec.nome,\n    receitaKey: st.receita,\n    etapaNome: et.nome,\n    etapaIdx: st.etapa+1,\n    etapaTotal: rec.etapas.length,\n    setpoint: et.temp,\n    etapaDurSeg: et.durMin*60,\n    concluido: st.concluido\n  }};\n}\n\nconst topic = msg.topic;\nconst p = msg.payload;\n\n// troca de receita\nif (topic === 'receita' || (typeof p === 'string' && RECEITAS[p])) {\n  if (RECEITAS[p]) s.receita = p;\n  s.etapa = 0; s.rodando = false; s.bomba = false; s.aquec = false;\n  s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE;\n  context.set('s', s);\n  return emitir();\n}\n\n// comando P (processo)\nif (p === 'P') {\n  if (!s.rodando) {\n    if (s.concluido) { s.etapa = 0; s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE; }\n    s.rodando = true; s.bomba = false;\n  } else {\n    s.rodando = false;\n  }\n  context.set('s', s);\n  return emitir();\n}\n\n// comando B (bomba, so com processo parado)\nif (p === 'B') {\n  if (!s.rodando) { s.bomba = !s.bomba; context.set('s', s); }\n  return emitir();\n}\n\n// tick: avanco da simulacao\nif (topic === 'tick') {\n  const rec = RECEITAS[s.receita] || RECEITAS.teste;\n  const totalSeg = rec.etapas.reduce(function(a,e){ return a + e.durMin*60; }, 0);\n  const menorSeg = rec.etapas.reduce(function(a,e){ return Math.min(a, e.durMin*60); }, Infinity);\n  // tempo acelerado p/ visualizacao: receita inteira em ~40s,\n  // mas garantindo que ate a etapa mais curta tenha >= 6 passos (patamar visivel)\n  const passoSeg = Math.max(1, Math.min(totalSeg/40, menorSeg/6));\n\n  if (s.rodando) {\n    let et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const durSeg = et.durMin*60;\n    s.decSeg += passoSeg;\n    if (s.decSeg >= durSeg) {\n      if (s.etapa < rec.etapas.length-1) { s.etapa++; s.decSeg = 0; }\n      else { s.decSeg = durSeg; s.rodando = false; s.concluido = true; }   // clamp + conclui\n    }\n    et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const sp = et.temp;\n    s.bomba = false;                                   // intertravamento\n    // aproximacao exponencial: sobe e ASSENTA no setpoint (patamar limpo),\n    // independente da aceleracao do tempo\n    s.temp += (sp - s.temp) * 0.5;\n    s.aquec = (s.temp < sp - HIST);                    // LED: aquecendo enquanto abaixo do alvo\n  } else {\n    s.aquec = false;\n    if (!s.concluido) s.temp += (AMBIENTE - s.temp) * 0.03;   // esfria so se PAUSADO (concluido segura)\n  }\n  context.set('s', s);\n  return emitir();\n}\n\nreturn null;",
+    "func": "// MOTOR DE SIMULACAO DO ARDUINO\n// Emite o MESMO objeto do Arduino (apos parse JSON):\n//   {temp, proc, rodando, bomba, aquec, dec} + extras p/ UI\n// Entradas (1 input, desambiguadas por topic/payload):\n//   msg.topic==='tick'  -> avanca a simulacao\n//   msg.payload==='P'   -> inicia/pausa processo\n//   msg.payload==='B'   -> liga/desliga bomba (so parado)\n//   payload === chave de receita -> troca receita\n//\n// AUTO-SWITCH: se o Arduino real enviou dado nos ultimos 5s, o simulador RECUA.\nif (Date.now() - (flow.get('lastReal') || 0) < 5000) return null;\n\nconst RECEITAS = {\n  teste:  { nome:'Teste / Padrao', etapas:[ {nome:'Mostura 65C', temp:65, durMin:2} ] },\n  pilsen: { nome:'Pilsen (mostura por etapas)', etapas:[\n      {nome:'Patamar proteico', temp:52, durMin:15},\n      {nome:'Sacarificacao',    temp:63, durMin:40},\n      {nome:'Mash-out',         temp:78, durMin:5} ] },\n  apa:    { nome:'American Pale Ale', etapas:[\n      {nome:'Sacarificacao', temp:67, durMin:45},\n      {nome:'Mash-out',      temp:78, durMin:8} ] }\n};\nconst AMBIENTE = 25.0;\nconst HIST = 0.5;\n\nlet s = context.get('s');\nif (!s) {\n  s = { receita:'teste', etapa:0, temp:AMBIENTE, rodando:false, bomba:false,\n        aquec:false, decSeg:0, concluido:false, atingiu:false };\n  context.set('s', s);\n}\n\nfunction getRec(st) {\n  if (st.receita === 'custom') {\n    const c = context.get('customReceita');\n    if (c && c.etapas && c.etapas.length) return c;\n  }\n  return RECEITAS[st.receita] || RECEITAS.teste;\n}\n\nfunction emitir() {\n  const st = context.get('s');\n  const rec = getRec(st);\n  const et = rec.etapas[Math.min(st.etapa, rec.etapas.length-1)];\n  return { payload: {\n    // compativel com o Arduino real:\n    temp: Math.round(st.temp*10)/10,\n    proc: st.etapa+1,\n    rodando: st.rodando ? 1 : 0,\n    bomba: st.bomba ? 1 : 0,\n    aquec: st.aquec ? 1 : 0,\n    dec: Math.round(st.decSeg*1000),\n    // extras p/ a UI:\n    receita: rec.nome,\n    receitaKey: st.receita,\n    etapaNome: et.nome,\n    etapaIdx: st.etapa+1,\n    etapaTotal: rec.etapas.length,\n    setpoint: et.temp,\n    etapaDurSeg: et.durMin*60,\n    concluido: st.concluido,\n    aguardandoTemp: st.rodando && !st.atingiu && !st.concluido\n  }};\n}\n\nconst topic = msg.topic;\nconst p = msg.payload;\n\n// troca de receita\nif (topic === 'receita' || (typeof p === 'string' && RECEITAS[p])) {\n  if (RECEITAS[p]) s.receita = p;\n  s.etapa = 0; s.rodando = false; s.bomba = false; s.aquec = false;\n  s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE; s.atingiu = false;\n  context.set('s', s);\n  return emitir();\n}\n\n// receita personalizada (vinda do construtor drag & drop)\nif (topic === 'receita_custom') {\n  const arr = (msg.payload && Array.isArray(msg.payload.etapas)) ? msg.payload.etapas : [];\n  if (arr.length) {\n    context.set('customReceita', { nome:'Personalizada', etapas: arr });\n    s.receita = 'custom'; s.etapa = 0; s.rodando = false; s.bomba = false;\n    s.aquec = false; s.decSeg = 0; s.concluido = false; s.atingiu = false; s.temp = AMBIENTE;\n    context.set('s', s);\n  }\n  return emitir();\n}\n\n// comando P (processo)\nif (p === 'P') {\n  if (!s.rodando) {\n    if (s.concluido) { s.etapa = 0; s.decSeg = 0; s.concluido = false; s.temp = AMBIENTE; s.atingiu = false; }\n    s.rodando = true; s.bomba = false;\n  } else {\n    s.rodando = false;\n  }\n  context.set('s', s);\n  return emitir();\n}\n\n// comando B (bomba) — pode ligar/desligar tambem DURANTE o processo\nif (p === 'B') {\n  s.bomba = !s.bomba; context.set('s', s);\n  return emitir();\n}\n\n// tick: avanco da simulacao\nif (topic === 'tick') {\n  const rec = getRec(s);\n  const totalSeg = rec.etapas.reduce(function(a,e){ return a + e.durMin*60; }, 0);\n  const menorSeg = rec.etapas.reduce(function(a,e){ return Math.min(a, e.durMin*60); }, Infinity);\n  // tempo acelerado p/ visualizacao: receita inteira em ~40s,\n  // mas garantindo que ate a etapa mais curta tenha >= 6 passos (patamar visivel)\n  const passoSeg = Math.max(1, Math.min(totalSeg/40, menorSeg/6));\n\n  if (s.rodando) {\n    const et = rec.etapas[Math.min(s.etapa, rec.etapas.length-1)];\n    const sp = et.temp;\n    // sobe e ASSENTA no setpoint (patamar limpo), independente da aceleracao\n    s.temp += (sp - s.temp) * 0.5;\n    s.aquec = (s.temp < sp - HIST);                    // LED: aquecendo enquanto abaixo do alvo\n    // o TEMPO so comeca a contar APOS atingir a temperatura do patamar\n    if (!s.atingiu && s.temp >= sp - HIST) s.atingiu = true;\n    if (s.atingiu) {\n      const durSeg = et.durMin*60;\n      s.decSeg += passoSeg;\n      if (s.decSeg >= durSeg) {\n        if (s.etapa < rec.etapas.length-1) { s.etapa++; s.decSeg = 0; s.atingiu = false; }  // proxima etapa espera o alvo\n        else { s.decSeg = durSeg; s.rodando = false; s.concluido = true; }                  // clamp + conclui\n      }\n    }\n    // bomba: SEM intertravamento (pode ligar durante o processo)\n  } else {\n    s.aquec = false;\n    if (!s.concluido) s.temp += (AMBIENTE - s.temp) * 0.03;   // esfria so se PAUSADO (concluido segura)\n  }\n  context.set('s', s);\n  return emitir();\n}\n\nreturn null;",
     "outputs": 1,
     "noerr": 0,
     "initialize": "",
@@ -264,7 +264,7 @@
     "width": 5,
     "height": 6,
     "head": "",
-    "format": "<template>\n  <div class=\"cerv-status\">\n    <div v-if=\"s.alerta\" class=\"cerv-alerta\">⚠️ Temperatura alta: {{ s.temp.toFixed(1) }}&deg;C</div>\n    <div class=\"cerv-row\">\n      <div class=\"cerv-temp\" :style=\"{ color: tempColor }\">{{ s.temp.toFixed(1) }}<span class=\"cerv-unit\">&deg;C</span></div>\n      <div class=\"cerv-alvo\">\n        <div class=\"cerv-alvo-label\">ALVO</div>\n        <div class=\"cerv-alvo-val\">{{ s.setpoint }}&deg;C</div>\n      </div>\n    </div>\n    <div class=\"cerv-etapa\">\n      <span class=\"cerv-badge\" :class=\"s.concluido ? 'done' : (s.rodando ? 'run' : 'stop')\">\n        {{ s.concluido ? 'CONCLUIDO' : (s.rodando ? 'RODANDO' : 'PARADO') }}\n      </span>\n      <span class=\"cerv-etapa-nome\">Etapa {{ s.etapaIdx }}/{{ s.etapaTotal }} &mdash; {{ s.etapaNome }}</span>\n      <span class=\"cerv-timer\">{{ fmt(s.decSeg) }} / {{ fmt(s.etapaDurSeg) }}</span>\n    </div>\n    <div class=\"cerv-chips\">\n      <span class=\"chip\" :class=\"s.bomba ? 'on-bomba' : 'off'\">💧 Bomba: {{ s.bomba ? 'LIGADA' : 'DESLIGADA' }}</span>\n      <span class=\"chip\" :class=\"s.aquec ? 'on-aquec' : 'off'\">🔥 Aquecedor: {{ s.aquec ? 'LIGADO' : 'DESLIGADO' }}</span>\n    </div>\n    <div class=\"cerv-receita\">🍺 {{ s.receita }}</div>\n  </div>\n</template>\n<script>\nexport default {\n  data() {\n    return { s: { temp:0, setpoint:0, rodando:false, bomba:false, aquec:false,\n                  receita:'—', etapaNome:'—', etapaIdx:1, etapaTotal:1,\n                  decSeg:0, etapaDurSeg:0, concluido:false, alerta:false } }\n  },\n  computed: {\n    tempColor() {\n      const t = this.s.temp;\n      if (t >= 80) return '#ff5252';\n      if (t >= 60) return '#ffb74d';\n      return '#4fc3f7';\n    }\n  },\n  watch: {\n    msg(n) {\n      if (n && n.payload && typeof n.payload === 'object') {\n        this.s = Object.assign({}, this.s, n.payload);\n      }\n    }\n  },\n  methods: {\n    fmt(sec) {\n      sec = Math.max(0, Math.floor(sec || 0));\n      const m = Math.floor(sec / 60), x = sec % 60;\n      return (m < 10 ? '0' : '') + m + ':' + (x < 10 ? '0' : '') + x;\n    }\n  }\n}\n</script>\n<style>\n.cerv-status { padding: 6px 4px; font-family: 'Inter', system-ui, sans-serif; }\n.cerv-alerta { background:#b71c1c; color:#fff; padding:6px 10px; border-radius:8px; margin-bottom:10px; font-weight:600; text-align:center; }\n.cerv-row { display:flex; align-items:baseline; justify-content:space-between; }\n.cerv-temp { font-size:60px; font-weight:700; line-height:1; }\n.cerv-unit { font-size:26px; font-weight:500; margin-left:2px; opacity:.8; }\n.cerv-alvo { text-align:right; }\n.cerv-alvo-label { font-size:11px; letter-spacing:2px; color:#9e8a6f; }\n.cerv-alvo-val { font-size:26px; font-weight:600; color:#d39a3e; }\n.cerv-etapa { display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap; }\n.cerv-badge { padding:3px 10px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:1px; }\n.cerv-badge.run { background:#1d9e75; color:#fff; }\n.cerv-badge.stop { background:#5a5048; color:#fff; }\n.cerv-badge.done { background:#2962ff; color:#fff; }\n.cerv-etapa-nome { font-size:14px; color:#e8dcc8; }\n.cerv-timer { margin-left:auto; font-family:'JetBrains Mono', monospace; font-size:18px; color:#e8dcc8; }\n.cerv-chips { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }\n.chip { padding:5px 12px; border-radius:14px; font-size:13px; font-weight:600; background:#2e2419; color:#9e8a6f; border:1px solid #3a2a1c; }\n.chip.on-bomba { background:#0d3a2c; color:#3ddc97; border-color:#1d9e75; }\n.chip.on-aquec { background:#3a230d; color:#ffb74d; border-color:#c8862a; }\n.cerv-receita { margin-top:14px; font-size:13px; color:#9e8a6f; }\n</style>",
+    "format": "<template>\n  <div class=\"cerv-status\">\n    <div v-if=\"s.alerta\" class=\"cerv-alerta\">⚠️ Temperatura alta: {{ s.temp.toFixed(1) }}&deg;C</div>\n    <div class=\"cerv-row\">\n      <div class=\"cerv-temp\" :style=\"{ color: tempColor }\">{{ s.temp.toFixed(1) }}<span class=\"cerv-unit\">&deg;C</span></div>\n      <div class=\"cerv-alvo\">\n        <div class=\"cerv-alvo-label\">ALVO</div>\n        <div class=\"cerv-alvo-val\">{{ s.setpoint }}&deg;C</div>\n      </div>\n    </div>\n    <div class=\"cerv-etapa\">\n      <span class=\"cerv-badge\" :class=\"s.concluido ? 'done' : (s.rodando ? 'run' : 'stop')\">\n        {{ s.concluido ? 'CONCLUIDO' : (s.rodando ? 'RODANDO' : 'PARADO') }}\n      </span>\n      <span class=\"cerv-etapa-nome\">Etapa {{ s.etapaIdx }}/{{ s.etapaTotal }} &mdash; {{ s.etapaNome }}</span>\n      <span class=\"cerv-timer\" v-if=\"!s.aguardandoTemp\">{{ fmt(s.decSeg) }} / {{ fmt(s.etapaDurSeg) }}</span>\n      <span class=\"cerv-timer cerv-aquecendo\" v-else>⏳ aquecendo at&eacute; o alvo</span>\n    </div>\n    <div class=\"cerv-chips\">\n      <span class=\"chip\" :class=\"s.bomba ? 'on-bomba' : 'off'\">💧 Bomba: {{ s.bomba ? 'LIGADA' : 'DESLIGADA' }}</span>\n      <span class=\"chip\" :class=\"s.aquec ? 'on-aquec' : 'off'\">🔥 Aquecedor: {{ s.aquec ? 'LIGADO' : 'DESLIGADO' }}</span>\n    </div>\n    <div class=\"cerv-receita\">🍺 {{ s.receita }}</div>\n  </div>\n</template>\n<script>\nexport default {\n  data() {\n    return { s: { temp:0, setpoint:0, rodando:false, bomba:false, aquec:false,\n                  receita:'—', etapaNome:'—', etapaIdx:1, etapaTotal:1,\n                  decSeg:0, etapaDurSeg:0, concluido:false, alerta:false, aguardandoTemp:false } }\n  },\n  computed: {\n    tempColor() {\n      const t = this.s.temp;\n      if (t >= 80) return '#ff5252';\n      if (t >= 60) return '#ffb74d';\n      return '#4fc3f7';\n    }\n  },\n  watch: {\n    msg(n) {\n      if (n && n.payload && typeof n.payload === 'object') {\n        this.s = Object.assign({}, this.s, n.payload);\n      }\n    }\n  },\n  methods: {\n    fmt(sec) {\n      sec = Math.max(0, Math.floor(sec || 0));\n      const m = Math.floor(sec / 60), x = sec % 60;\n      return (m < 10 ? '0' : '') + m + ':' + (x < 10 ? '0' : '') + x;\n    }\n  }\n}\n</script>\n<style>\n.cerv-status { padding: 6px 4px; font-family: 'Inter', system-ui, sans-serif; }\n.cerv-alerta { background:#b71c1c; color:#fff; padding:6px 10px; border-radius:8px; margin-bottom:10px; font-weight:600; text-align:center; }\n.cerv-row { display:flex; align-items:baseline; justify-content:space-between; }\n.cerv-temp { font-size:60px; font-weight:700; line-height:1; }\n.cerv-unit { font-size:26px; font-weight:500; margin-left:2px; opacity:.8; }\n.cerv-alvo { text-align:right; }\n.cerv-alvo-label { font-size:11px; letter-spacing:2px; color:#9e8a6f; }\n.cerv-alvo-val { font-size:26px; font-weight:600; color:#d39a3e; }\n.cerv-etapa { display:flex; align-items:center; gap:10px; margin-top:12px; flex-wrap:wrap; }\n.cerv-badge { padding:3px 10px; border-radius:12px; font-size:12px; font-weight:700; letter-spacing:1px; }\n.cerv-badge.run { background:#1d9e75; color:#fff; }\n.cerv-badge.stop { background:#5a5048; color:#fff; }\n.cerv-badge.done { background:#2962ff; color:#fff; }\n.cerv-etapa-nome { font-size:14px; color:#e8dcc8; }\n.cerv-timer { margin-left:auto; font-family:'JetBrains Mono', monospace; font-size:18px; color:#e8dcc8; }\n.cerv-aquecendo { margin-left:auto; color:#ffb74d; font-size:13px; font-weight:600; }\n.cerv-chips { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }\n.chip { padding:5px 12px; border-radius:14px; font-size:13px; font-weight:600; background:#2e2419; color:#9e8a6f; border:1px solid #3a2a1c; }\n.chip.on-bomba { background:#0d3a2c; color:#3ddc97; border-color:#1d9e75; }\n.chip.on-aquec { background:#3a230d; color:#ffb74d; border-color:#c8862a; }\n.cerv-receita { margin-top:14px; font-size:13px; color:#9e8a6f; }\n</style>",
     "storeOutMessages": true,
     "passthru": false,
     "resendOnRefresh": true,
@@ -439,7 +439,7 @@
     "width": 4,
     "height": 1,
     "emulateClick": false,
-    "tooltip": "So funciona com o processo parado",
+    "tooltip": "Liga/desliga a bomba (tambem durante o processo)",
     "color": "#d39a3e",
     "bgcolor": "#2e2419",
     "className": "",
@@ -462,10 +462,35 @@
     ]
   },
   {
+    "id": "builder_tmpl",
+    "type": "ui-template",
+    "z": "tab_sim",
+    "group": "grp_builder",
+    "name": "Construtor de Receita",
+    "order": 1,
+    "width": 8,
+    "height": 10,
+    "head": "",
+    "format": "<template>\n  <div class=\"rb\">\n    <div class=\"rb-head\">🧪 Monte sua receita <span class=\"rb-sub\">(arraste &#10303; para reordenar)</span></div>\n    <div class=\"rb-list\">\n      <div v-for=\"(et, i) in etapas\" :key=\"i\" class=\"rb-row\" :class=\"{ 'rb-drag': dragIdx === i }\"\n           draggable=\"true\" @dragstart=\"onStart(i)\" @dragover.prevent @drop=\"onDrop(i)\" @dragend=\"dragIdx = null\">\n        <span class=\"rb-handle\" title=\"arraste\">&#10303;</span>\n        <span class=\"rb-badge\">{{ i + 1 }}</span>\n        <div class=\"rb-field\"><span>Temp</span><input type=\"number\" v-model.number=\"et.temp\" min=\"20\" max=\"100\" step=\"1\"><span class=\"rb-u\">&deg;C</span></div>\n        <div class=\"rb-field\"><span>Tempo</span><input type=\"number\" v-model.number=\"et.durMin\" min=\"1\" max=\"180\" step=\"1\"><span class=\"rb-u\">min</span></div>\n        <button class=\"rb-del\" @click=\"remover(i)\" title=\"remover\">&times;</button>\n      </div>\n      <div v-if=\"!etapas.length\" class=\"rb-empty\">Sem etapas. Clique em &ldquo;+ etapa&rdquo;.</div>\n    </div>\n    <div class=\"rb-actions\">\n      <button class=\"rb-add\" @click=\"adicionar\">+ etapa</button>\n      <button class=\"rb-use\" @click=\"usar\" :disabled=\"!etapas.length\">&#9654; Usar esta receita</button>\n    </div>\n    <div class=\"rb-foot\">{{ etapas.length }} etapa(s) &middot; a temperatura sobe e o tempo s&oacute; conta ao atingir o alvo.</div>\n  </div>\n</template>\n<script>\nexport default {\n  data() {\n    return {\n      etapas: [ { temp: 67, durMin: 60 }, { temp: 78, durMin: 10 } ],\n      dragIdx: null\n    }\n  },\n  methods: {\n    adicionar() { this.etapas.push({ temp: 65, durMin: 15 }); },\n    remover(i) { this.etapas.splice(i, 1); },\n    onStart(i) { this.dragIdx = i; },\n    onDrop(i) {\n      if (this.dragIdx === null || this.dragIdx === i) { this.dragIdx = null; return; }\n      const item = this.etapas.splice(this.dragIdx, 1)[0];\n      this.etapas.splice(i, 0, item);\n      this.dragIdx = null;\n    },\n    usar() {\n      const et = this.etapas\n        .filter(e => Number(e.temp) > 0 && Number(e.durMin) > 0)\n        .map((e, idx) => ({ nome: 'Etapa ' + (idx + 1), temp: Number(e.temp), durMin: Number(e.durMin) }));\n      if (!et.length) return;\n      this.send({ topic: 'receita_custom', payload: { etapas: et } });\n    }\n  }\n}\n</script>\n<style>\n.rb { padding: 6px 4px; font-family: 'Inter', system-ui, sans-serif; color:#e8dcc8; }\n.rb-head { font-size:15px; font-weight:700; margin-bottom:10px; }\n.rb-sub { font-size:12px; font-weight:400; color:#9e8a6f; }\n.rb-list { display:flex; flex-direction:column; gap:8px; }\n.rb-row { display:flex; align-items:center; gap:10px; background:#2e2419; border:1px solid #3a2a1c; border-radius:10px; padding:8px 10px; }\n.rb-row.rb-drag { opacity:.4; border-style:dashed; }\n.rb-handle { cursor:grab; color:#9e8a6f; font-size:18px; user-select:none; }\n.rb-badge { width:22px; height:22px; border-radius:50%; background:#d39a3e; color:#241a12; font-weight:700; display:flex; align-items:center; justify-content:center; font-size:12px; flex:0 0 auto; }\n.rb-field { display:flex; align-items:center; gap:6px; font-size:13px; color:#cbb89a; }\n.rb-field input { width:62px; background:#1b1410; border:1px solid #3a2a1c; color:#fff; border-radius:6px; padding:4px 6px; font-size:14px; }\n.rb-u { color:#9e8a6f; }\n.rb-del { margin-left:auto; background:transparent; border:none; color:#e57373; font-size:18px; cursor:pointer; line-height:1; }\n.rb-empty { color:#9e8a6f; font-size:13px; padding:8px; }\n.rb-actions { display:flex; gap:10px; margin-top:12px; }\n.rb-add, .rb-use { border:none; border-radius:8px; padding:8px 14px; font-weight:600; cursor:pointer; font-size:14px; }\n.rb-add { background:#2e2419; color:#d39a3e; border:1px solid #3a2a1c; }\n.rb-use { background:#1d9e75; color:#fff; }\n.rb-use:disabled { opacity:.5; cursor:not-allowed; }\n.rb-foot { margin-top:10px; font-size:12px; color:#9e8a6f; }\n</style>",
+    "storeOutMessages": false,
+    "passthru": false,
+    "resendOnRefresh": false,
+    "templateScope": "local",
+    "className": "",
+    "x": 360,
+    "y": 500,
+    "wires": [
+      [
+        "sim_engine",
+        "chart_clear"
+      ]
+    ]
+  },
+  {
     "id": "serial_cfg",
     "type": "serial-port",
     "name": "Arduino",
-    "serialport": "COM5",
+    "serialport": "COM255",
     "serialbaud": "9600",
     "databits": "8",
     "parity": "none",
@@ -494,7 +519,7 @@
     ],
     "showPathInSidebar": false,
     "headerContent": "page",
-    "navigationStyle": "temporary",
+    "navigationStyle": "fixed",
     "titleBarStyle": "default"
   },
   {
@@ -553,6 +578,42 @@
     "disabled": "false"
   },
   {
+    "id": "ui_page_receita",
+    "type": "ui-page",
+    "name": "Montar Receita",
+    "ui": "ui_base",
+    "path": "/receita",
+    "icon": "flask",
+    "layout": "grid",
+    "theme": "ui_theme",
+    "breakpoints": [
+      {
+        "name": "Default",
+        "px": 0,
+        "cols": 3
+      },
+      {
+        "name": "Tablet",
+        "px": 576,
+        "cols": 6
+      },
+      {
+        "name": "Small Desktop",
+        "px": 768,
+        "cols": 9
+      },
+      {
+        "name": "Desktop",
+        "px": 1024,
+        "cols": 12
+      }
+    ],
+    "order": 2,
+    "className": "",
+    "visible": "true",
+    "disabled": "false"
+  },
+  {
     "id": "grp_status",
     "type": "ui-group",
     "name": "Status do Processo",
@@ -602,6 +663,20 @@
     "width": 12,
     "height": 1,
     "order": 4,
+    "showTitle": true,
+    "className": "",
+    "visible": true,
+    "disabled": false,
+    "groupType": "default"
+  },
+  {
+    "id": "grp_builder",
+    "type": "ui-group",
+    "name": "Receita Personalizada",
+    "page": "ui_page_receita",
+    "width": 8,
+    "height": 1,
+    "order": 1,
     "showTitle": true,
     "className": "",
     "visible": true,

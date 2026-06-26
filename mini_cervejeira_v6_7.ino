@@ -1,6 +1,10 @@
 /*
- * MINI CERVEJEIRA - v6.0
+ * MINI CERVEJEIRA - v6.7  (atualizado: pedidos do professor)
  * Loop não-bloqueante | sem delay() | debounce por borda
+ *
+ * MUDANCAS (pedidos do professor):
+ *  - A bomba pode ligar/desligar tambem DURANTE o processo (sem intertravamento).
+ *  - O tempo do patamar (2 min) so comeca a contar APOS atingir 65 C.
  *
  * PINAGEM:
  *   BTN_BOMBA      → 2   BTN_PROCESSO → 3
@@ -42,6 +46,7 @@ bool          processoRodando = false;
 bool          bombaLigada     = false;
 bool          aquecedorLigado = false;
 bool          sensorOK        = false;
+bool          tempAtingida    = false;   // o patamar (65 C) ja foi atingido?
 float         temperatura     = 0.0;
 unsigned long tempoDecorrido  = 0;
 unsigned long tInicio         = 0;
@@ -83,7 +88,7 @@ void enviarJSON(unsigned long agora) {
   if (agora - tSerial < 1000) return;
   tSerial = agora;
 
-  unsigned long dec = tempoDecorrido + (processoRodando ? agora - tInicio : 0);
+  unsigned long dec = tempAtingida ? (tempoDecorrido + (processoRodando ? agora - tInicio : 0)) : 0;
 
   Serial.print(F("{\"temp\":"));   Serial.print(temperatura, 1);
   Serial.print(F(",\"proc\":"));   Serial.print(processoAtual);
@@ -102,10 +107,11 @@ void receberComando(unsigned long agora) {
     if (!processoRodando) {
       bombaLigada = false; processoRodando = true; tInicio = agora;
     } else {
-      tempoDecorrido += agora - tInicio; processoRodando = false;
+      if (tempAtingida) tempoDecorrido += agora - tInicio;
+      processoRodando = false;
     }
   }
-  if (cmd == 'B' && !processoRodando)        // toggle bomba (só parado)
+  if (cmd == 'B')                            // toggle bomba (pode durante o processo)
     bombaLigada = !bombaLigada;
 }
 
@@ -157,19 +163,28 @@ void loop() {
       processoRodando = true;
       tInicio = agora;
     } else {
-      tempoDecorrido += agora - tInicio;
+      if (tempAtingida) tempoDecorrido += agora - tInicio;
       processoRodando = false;
     }
   }
   antProc = lP;
 
-  // ── Fim automático do Processo 1 (2 min) ─────────────────
-  if (processoRodando) {
+  // ── Atingiu a temperatura alvo? Libera a contagem do tempo ──
+  if (processoRodando && processoAtual == 1 && !tempAtingida &&
+      sensorOK && temperatura >= TEMP_ALVO) {
+    tempAtingida   = true;
+    tInicio        = agora;     // o tempo do patamar so comeca AGORA
+    tempoDecorrido = 0;
+  }
+
+  // ── Fim automático do Processo 1 (2 min APÓS atingir 65°C) ─
+  if (processoRodando && processoAtual == 1 && tempAtingida) {
     unsigned long total = tempoDecorrido + (agora - tInicio);
-    if (processoAtual == 1 && total >= DURACAO_P1) {
+    if (total >= DURACAO_P1) {
       tempoDecorrido  = 0;
       processoRodando = false;
       processoAtual   = 2;
+      tempAtingida    = false;
     }
   }
 
@@ -183,8 +198,7 @@ void loop() {
     digitalWrite(RELE_AQUECEDOR, LOW); aquecedorLigado = false;
   }
 
-  // ── Bomba ────────────────────────────────────────────────
-  if (processoRodando) bombaLigada = false;
+  // ── Bomba (sem intertravamento — pode ligar durante o processo) ──
   digitalWrite(RELE_BOMBA, bombaLigada ? LOW : HIGH);
 
   // ── LCD (200ms) ──────────────────────────────────────────
@@ -193,7 +207,7 @@ void loop() {
   if (agora - tLCD >= INTERVALO_LCD) {
     tLCD = agora;
 
-    unsigned long dec = tempoDecorrido + (processoRodando ? agora - tInicio : 0);
+    unsigned long dec = tempAtingida ? (tempoDecorrido + (processoRodando ? agora - tInicio : 0)) : 0;
 
     // Linha 1: "Temp:  65.0°C AQUEC "  (20 cols)
     lcd.setCursor(0, 1); lcd.print(F("Temp: "));
